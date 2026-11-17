@@ -8,32 +8,6 @@ import numpy as np
 import os
 import copy
 
-"""
-mc_dropout.py
-=============
-Monte Carlo dropout inference for the trained DART-Vetter (Gal & Ghahramani, 2016).
-
-Why: DART-Vetter was always trained with dropout active (dropout -> max-pool ->
-BatchNorm in every block). With dropout switched off at test time the network
-sees a different signal than in training and its outputs are distorted.
-MC dropout keeps dropout ON at test time, runs every signal T times and
-averages the T probabilities:
-  - the mean   = the prediction (stable, because it is an average)
-  - the std    = how much the model disagrees with itself = its uncertainty
-
-BatchNorm stays in eval mode with the ORIGINAL running statistics, which were
-collected with dropout active, so they match this setting. Predictions do not
-depend on which other signals are in the batch.
-
-Output:
-  - metrics on train and test for several T
-  - outputs/predictions/<split>_mc.csv with signal_id, label, p_mean, p_std
-    (input for baselines, calibration and conformal prediction)
-
-Run from the project root:
-  python mc_dropout.py
-"""
-
 
 T_VALUES = (1, 5, 10, 30, 50)    # number of stochastic passes to compare
 T_FINAL = 30                     # T used for the saved predictions

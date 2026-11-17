@@ -2,24 +2,7 @@ from sklearn.model_selection import GroupShuffleSplit
 import pandas as pd
 import argparse
 
-"""
-split_dataset.py
-================
-Merges one or more datasets made by build_dataset.py (e.g. parallel shards)
-and splits them into train and test files BY STAR, so that no star appears
-in both sets (prevents data leakage: one star can have several signals,
-and they look alike).
- 
-Input : <data>.csv (201 values + label, no header) and <data>_meta.csv,
-        for every path given in --data
-Output: <out>_train.csv and <out>_test.csv (same format, no header)
-        + <out>_train_meta.csv / <out>_test_meta.csv for traceability
- 
-Examples
-  python split_dataset.py --data data/kepler_dr24 --out data/kepler_dr24
-  python split_dataset.py --data data/kepler_dr24_shard0of4 data/kepler_dr24_shard1of4 \
-      data/kepler_dr24_shard2of4 data/kepler_dr24_shard3of4 --out data/kepler_dr24
-"""
+# Split a dataset into train/test sets
 
 
 def load(path):
@@ -46,8 +29,7 @@ def main():
     parts = [load(p) for p in args.data]
     views = pd.concat([v for v, _ in parts], ignore_index=True)
     meta = pd.concat([m for _, m in parts], ignore_index=True)
-    # If a signal appears in several files (e.g. rebuilt with fixed code),
-    # keep the version from the LAST file given in --data.
+    # If a signal appears in several files, keep the version from the LAST file given in --data.
     keep_last = ~meta["signal_id"].duplicated(keep="last")
     if (~keep_last).any():
         print(f"replaced {int((~keep_last).sum())} signals by their rebuilt version")

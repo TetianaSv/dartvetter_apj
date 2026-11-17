@@ -5,30 +5,6 @@ import torch
 import numpy as np
 import copy
 
-"""
-bn_experiments.py
-=================
-Which BatchNorm statistics make the trained DART-Vetter work at test time?
-
-Facts so far (test set):
-  eval, stored BN statistics, dropout off ............ ROC-AUC 0.844
-  BN statistics recomputed with dropout OFF .......... ROC-AUC 0.859
-  MC dropout, stored BN statistics ................... ROC-AUC 0.840
-  batch statistics + dropout on (train mode) ......... ROC-AUC 0.940 (shuffled too)
-
-Hypothesis: the stored statistics are stale (an exponential moving average
-over the last training batches while the weights were still changing).
-Test: recompute them precisely on the TRAINING data with dropout ON
-("Precise BN"), then predict with MC dropout. No weights are trained.
-
-Also checks how the batch-statistics result depends on the batch size:
-a method whose output depends on the other signals in the batch cannot
-classify a single new signal.
-
-Run from the project root:
-  python bn_experiments.py
-"""
-
 
 cfg = yaml.safe_load(open("config_cnn.yaml"))
 BS = cfg["batch_size"]
