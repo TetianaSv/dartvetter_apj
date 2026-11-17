@@ -3,24 +3,7 @@ import numpy as np
 import sys
 import shutil
 
-"""
-clip_views.py
-=============
-Clips global-view values to [-CLIP, CLIP] and writes new CSV files.
-
-Why: a view is normalised so that its baseline is 0 and its deepest point is -1.
-If the dip is tiny and there is a large upward spike (flare, artefact), dividing
-by the tiny depth makes the spike enormous (one training view reached 6959).
-A single such outlier inflates the BatchNorm running statistics learned during
-training, which squeezes every prediction at test time. Real dips (-1) and 99%
-of the data (|value| < 2.7) are not affected by clipping at 3.
-
-Writes <name>_clip.csv (+ copies <name>_clip_meta.csv) and lists clipped signals.
-
-Run from the project root:
-  python clip_views.py data/kepler_dr24_train data/kepler_dr24_test
-"""
-
+# clips the value to [−3, 3]
 
 CLIP = 3.0
 

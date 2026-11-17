@@ -6,34 +6,7 @@ import torch
 import numpy as np
 import copy
 
-"""
-diagnose_model.py
-=================
-Why does the trained DART-Vetter predict "not a planet" for every test signal?
-
-Loads the trained model and computes predicted probabilities on the train and
-test sets in two modes:
-  eval  - normal inference: dropout off, BatchNorm uses running statistics
-  train - dropout on, BatchNorm uses the statistics of the current batch
-          (run on a copy, so the saved model is not changed)
-  eval+BN fix - eval mode after recomputing BatchNorm statistics on the
-          training data with dropout off (see recalibrate_batchnorm)
-
-For each case it prints:
-  - the spread of predicted probabilities (min / median / 90th pct / max)
-  - ROC-AUC and PR-AUC computed from PROBABILITIES (not from 0/1 predictions)
-  - precision / recall / F1 at threshold 0.5 and at the best-F1 threshold
-
-How to read the result:
-  AUC high in eval mode, but all probabilities < 0.5  -> threshold / calibration problem
-  AUC high in train mode, but ~0.5 in eval mode       -> BatchNorm/dropout (eval mode) problem
-  AUC high on train, low on test in both modes        -> overfitting
-
-Run from the project root:
-  python diagnose_model.py
-"""
-
-
+# recalculates BatchNorm and saves _bnfix.pt
 torch.manual_seed(0)
 cfg = yaml.safe_load(open("config_cnn.yaml"))
 
@@ -103,8 +76,7 @@ for split, path in (("train", cfg["training_set_path"]), ("test", cfg["test_set_
     print(f"{split}: {len(y)} signals, planets={y.sum()}")
     for mode in ("eval", "train"):
         report(f"  {mode} mode", y, predict(model, x, mode))
-    # Leak check: in train mode BatchNorm normalises each signal with the statistics
-    # of its batch. If the file order correlates with the label, this leaks the label.
+    # Leak check
     # Shuffle the order, predict, then put the predictions back in the original order.
     perm = np.random.default_rng(0).permutation(len(y))
     p_shuffled = np.empty(len(y))

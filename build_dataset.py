@@ -11,61 +11,13 @@ import os
 import io
 import argparse
 
-"""
-build_dataset.py
-================
-Builds a DART-Vetter-style dataset ("global views") from public NASA data.
-
-For every transit signal (TCE / TOI) the script:
-  1. downloads the light curve from MAST with lightkurve,
-  2. removes slow stellar trends (flatten), keeping the transit itself masked,
-  3. folds the light curve on the orbital period,
-  4. bins the folded curve into 201 points (the "global view"),
-  5. normalises it (baseline = 0, transit depth = -1),
-  6. appends one CSV row: 201 numbers + label (1 = planet, 0 = not a planet).
-
-Output files (no header in the data file, because train_test_cnn_class.py
-does not skip one):
-  <out>.csv          201 values + label per row       -> input for DART-Vetter
-  <out>_meta.csv     ids / period / label per row     -> same order as <out>.csv,
-                                                         needed for splitting by star
-  <out>_failed.csv   signals that could not be processed, with the reason
-
-The script can be stopped and restarted: already processed signals are skipped.
-
-Labels
-  Kepler (Q1-Q17 DR24 TCE table, column av_training_set):
-      PC  -> 1 (planet candidate)
-      AFP -> 0 (astrophysical false positive, e.g. eclipsing binary)
-      NTP -> 0 (non-transiting phenomenon, e.g. noise / systematics)
-      UNK -> dropped
-  TESS (TOI table, column tfopwg_disp):
-      CP, KP -> 1 (confirmed / known planet)
-      FP, FA -> 0 (false positive / false alarm)
-      PC, APC and others -> dropped (not decided yet)
-
-Examples
-  python build_dataset.py --mission kepler --n 50  --out data/kepler_test_run
-  python build_dataset.py --mission kepler --n 3000 --out data/kepler_dr24
-  python build_dataset.py --mission tess   --n 1000 --out data/tess_toi
-
-  Faster: 4 terminals in parallel, same --n/--seed, different --shard:
-  python build_dataset.py --mission kepler --n 2000 --out data/kepler_dr24 --shard 0/4
-  python build_dataset.py --mission kepler --n 2000 --out data/kepler_dr24 --shard 1/4
-  ... (2/4 and 3/4); then merge them with split_dataset.py
-
-Data sources: NASA Exoplanet Archive (TAP service) and MAST, via lightkurve.
-"""
-
 
 N_BINS = 201                      # length of the global view used by DART-Vetter
 TAP_URL = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
 TESS_BJD_OFFSET = 2457000.0       # TESS light-curve time is BTJD = BJD - 2457000
 
-
-# ---------------------------------------------------------------------------
 # 1. Catalogue: which signals to process and their labels
-# ---------------------------------------------------------------------------
+
 
 def query_tap(adql):
     """Run an ADQL query on the NASA Exoplanet Archive and return a DataFrame."""
@@ -75,8 +27,7 @@ def query_tap(adql):
 
 
 def load_catalogue(mission):
-    """Return a table with the same columns for both missions:
-    star_id, signal_id, period_days, t0, duration_days, label."""
+
     if mission == "kepler":
         df = query_tap(
             "select kepid, tce_plnt_num, tce_period, tce_time0bk, tce_duration, "
@@ -111,14 +62,11 @@ def load_catalogue(mission):
 
     raise ValueError(f"Unknown mission: {mission}")
 
-
-# ---------------------------------------------------------------------------
 # 2. Light curve: download and clean
-# ---------------------------------------------------------------------------
+
 
 def download_light_curve(mission, star_id, cache_dir):
-    """Download all available light curves of one star and stitch them.
-    stitch() normalises every quarter/sector to a median of 1 before joining."""
+
     import lightkurve as lk
 
     if mission == "kepler":
@@ -135,24 +83,30 @@ def download_light_curve(mission, star_id, cache_dir):
     return collection.stitch().remove_nans()
 
 
+def download_with_retry(mission, star_id, cache_dir, retries=3, wait=(10, 30, 60)):
+
+    for attempt in range(retries + 1):
+        try:
+            return download_light_curve(mission, star_id, cache_dir)
+        except StarTimeout:
+            raise                                  # time limit for this star: give up
+        except Exception as exc:
+            if attempt == retries:
+                raise
+            print(f"   star {star_id}: {str(exc)[:60]}... retry in {wait[attempt]} s",
+                  flush=True)
+            time.sleep(wait[attempt])
+
+
 def odd_window(duration_days, cadence_days):
-    """Window for flatten(), in cadences: at least 3x the transit duration and
-    at least 1 day, so the transit itself is not removed as a 'trend'."""
+
     window_days = max(3.0 * duration_days, 1.0)
     n = int(np.ceil(window_days / cadence_days))
     return n + 1 if n % 2 == 0 else n
 
 
 def detrend(lc, period, t0, duration):
-    """Remove slow stellar variability while ignoring in-transit points.
 
-    break_tolerance: flatten() splits the light curve at gaps longer than this
-    many cadences. The transit mask itself creates gaps, so the tolerance must
-    be longer than one masked window. Otherwise, for short periods (< ~1.5 d),
-    the light curve is cut into pieces shorter than the window, which flatten()
-    divides by themselves -> flux exactly 1.0 -> flat zero bins in the view.
-    Real data gaps (days long) are still split as before.
-    """
     mask = lc.create_transit_mask(period=period, transit_time=t0,
                                   duration=2.0 * duration)
     cadence = float(np.nanmedian(np.diff(lc.time.value)))
@@ -161,12 +115,10 @@ def detrend(lc, period, t0, duration):
                       break_tolerance=gap_tolerance)
 
 
-# ---------------------------------------------------------------------------
-# 3. Global view: fold, bin, normalise  (pure numpy, easy to test)
-# ---------------------------------------------------------------------------
+# 3. Global view: fold, bin, normalise
 
 def fold_phase(time, period, t0):
-    """Phase in days, centred on the transit: values in [-period/2, period/2)."""
+
     return (time - t0 + 0.5 * period) % period - 0.5 * period
 
 
@@ -189,12 +141,11 @@ def bin_median(phase, flux, period, n_bins=N_BINS):
     return binned
 
 
-CLIP = 3.0   # see clip_views.py: one unclipped outlier (6959) broke BatchNorm
+CLIP = 3.0   # one outlier (6959) broke BatchNorm
 
 
 def normalise_view(view):
-    """Baseline (median) -> 0, deepest point -> -1 (same idea as Astronet),
-    then clip to [-CLIP, CLIP] so a tiny dip with a big spike cannot explode."""
+
     view = view - np.median(view)
     depth = np.abs(np.min(view))
     if not np.isfinite(depth) or depth == 0:
@@ -207,9 +158,7 @@ def global_view(time, flux, period, t0):
     return normalise_view(bin_median(phase, np.asarray(flux, float), period))
 
 
-# ---------------------------------------------------------------------------
 # 4. Main loop with restart support
-# ---------------------------------------------------------------------------
 
 class StarTimeout(Exception):
     """Raised when one star takes longer than --timeout seconds."""
@@ -249,6 +198,8 @@ def main():
     parser.add_argument("--shard", default="0/1",
                         help="K/N: process only part K of N (run N terminals in parallel, "
                              "each with its own K = 0..N-1 and the same --n and --seed)")
+    parser.add_argument("--pause", type=float, default=0.0,
+                        help="seconds to wait between stars, to be gentle with MAST")
     parser.add_argument("--ids", default=None,
                         help="CSV with a signal_id column: process exactly these signals "
                              "(ignores --n), e.g. to rebuild a subset with fixed code")
@@ -258,7 +209,7 @@ def main():
         args.out = f"{args.out}_shard{shard_k}of{shard_n}"
 
     warnings.filterwarnings("ignore")
-    signal.signal(signal.SIGALRM, _on_alarm)   # per-star time limit (macOS / Linux)
+    signal.signal(signal.SIGALRM, _on_alarm)   # per-star time limit
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     print(f"Downloading {args.mission} catalogue from the NASA Exoplanet Archive...")
@@ -285,7 +236,7 @@ def main():
         cache_dir = tempfile.mkdtemp(prefix="lk_")
         signal.alarm(args.timeout)              # start the clock for this star
         try:
-            lc = download_light_curve(args.mission, star_id, cache_dir)
+            lc = download_with_retry(args.mission, star_id, cache_dir)
         except Exception as exc:
             lc, star_error = None, f"download error: {exc}"
         else:
@@ -311,6 +262,8 @@ def main():
         signal.alarm(0)                         # stop the clock
         if not args.keep_cache:
             shutil.rmtree(cache_dir, ignore_errors=True)
+        if args.pause:
+            time.sleep(args.pause)
         elapsed = time.time() - start
         print(f"[{i}/{todo['star_id'].nunique()} stars] ok={n_ok} failed={n_fail} "
               f"elapsed={elapsed / 60:.1f} min", flush=True)
