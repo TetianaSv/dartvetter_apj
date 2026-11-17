@@ -1,0 +1,10 @@
+# Packages used by the COMP1818 coursework pipeline (Python 3.11.18)
+numpy==2.4.6
+pandas==2.3.3
+scikit-learn==1.9.1
+scipy==1.17.1
+torch==2.14.1
+matplotlib==3.11.2
+PyYAML==6.0.3
+lightkurve==2.6.0
+astroquery==0.4.11
